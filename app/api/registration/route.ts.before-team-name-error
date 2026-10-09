@@ -1,0 +1,552 @@
+import { NextRequest, NextResponse } from "next/server";
+import bcrypt from "bcryptjs";
+import { Pool } from "pg";
+import { Resend } from "resend";
+import nodemailer from "nodemailer";
+
+const pool = new Pool({
+  host: process.env.POSTGRES_HOST,
+  port: Number(process.env.POSTGRES_PORT || 5432),
+  user: process.env.POSTGRES_USER,
+  password: process.env.POSTGRES_PASSWORD,
+  database: process.env.POSTGRES_DB,
+});
+
+type Member = {
+  name?: unknown;
+  username?: unknown;
+  email?: unknown;
+};
+
+function clean(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
+function validIdentifier(value: string): boolean {
+  return /^[A-Za-z0-9_-]+$/.test(value);
+}
+
+export async function POST(request: NextRequest) {
+  const client = await pool.connect();
+
+  try {
+    const body = await request.json();
+
+    const teamName = clean(body?.team_name);
+    const email = clean(body?.email).toLowerCase();
+    const password = clean(body?.password);
+    const members = Array.isArray(body?.members)
+      ? (body.members as Member[])
+      : [];
+
+    if (!teamName) {
+      return NextResponse.json(
+        { success: false, error: "Team name is required." },
+        { status: 400 }
+      );
+    }
+
+    if (members.length !== 6) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Exactly 6 students are required per team.",
+        },
+        { status: 400 }
+      );
+    }
+
+    if (password.length < 8) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Shared password must contain at least 8 characters.",
+        },
+        { status: 400 }
+      );
+    }
+
+    const normalizedMembers = members.map((member) => ({
+      name: clean(member?.name),
+      username: clean(member?.username).toLowerCase(),
+      email: clean(member?.email).toLowerCase(),
+    }));
+
+    if (
+      normalizedMembers.some(
+        (member) => !member.name || !member.username || !member.email
+      )
+    ) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Every student must have a name, username and email.",
+        },
+        { status: 400 }
+      );
+    }
+
+    if (
+      normalizedMembers.some(
+        (member) => !validIdentifier(member.username)
+      )
+    ) {
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            "Student usernames may contain only letters, numbers, underscore and hyphen.",
+        },
+        { status: 400 }
+      );
+    }
+
+    if (
+      normalizedMembers.some(
+        (member) =>
+          !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(member.email)
+      )
+    ) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Every student must have a valid email address.",
+        },
+        { status: 400 }
+      );
+    }
+
+    const usernames = normalizedMembers.map(
+      (member) => member.username
+    );
+
+    if (new Set(usernames).size !== usernames.length) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Each student username must be unique.",
+        },
+        { status: 400 }
+      );
+    }
+
+    await client.query("BEGIN");
+
+    /*
+     * PHASE_8H_R6_AUTO_ALLOCATION
+     *
+     * The participant no longer chooses a team ID.
+     *
+     * TEAM01 -> TEAM10 are server-controlled contest slots.
+     *
+     * A transaction-level advisory lock prevents two registrations
+     * arriving at the same time from receiving the same slot.
+     *
+     * Existing team rows are reused. A slot is considered occupied
+     * only when contest_students already contains members for it.
+     *
+     * TEST01 is never considered because the allocation range is
+     * explicitly limited to TEAM01 through TEAM10.
+     */
+    await client.query(
+      `SELECT pg_advisory_xact_lock(hashtext('SOC_CONTEST_TEAM_ALLOCATION'))`
+    );
+
+    const allocationResult = await client.query(`
+      SELECT candidate.team_id
+      FROM (
+        VALUES
+          ('TEAM01'),
+          ('TEAM02'),
+          ('TEAM03'),
+          ('TEAM04'),
+          ('TEAM05'),
+          ('TEAM06'),
+          ('TEAM07'),
+          ('TEAM08'),
+          ('TEAM09'),
+          ('TEAM10')
+      ) AS candidate(team_id)
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM contest_students cs
+        WHERE UPPER(cs.team_id) = candidate.team_id
+      )
+      ORDER BY candidate.team_id
+      LIMIT 1
+    `);
+
+    if (allocationResult.rows.length !== 1) {
+      await client.query("ROLLBACK");
+
+      return NextResponse.json(
+        {
+          success: false,
+          error: "All 10 contest team slots are already registered.",
+        },
+        { status: 409 }
+      );
+    }
+
+    const teamId = allocationResult.rows[0].team_id;
+
+    /*
+     * Ensure the expected team table exists.
+     * This does not alter the contest-core schema.
+     */
+    const teamTable = await client.query(`
+      SELECT to_regclass('public.teams') AS table_name
+    `);
+
+    if (!teamTable.rows[0]?.table_name) {
+      throw new Error("teams table does not exist.");
+    }
+
+    const studentTable = await client.query(`
+      SELECT to_regclass('public.contest_students') AS table_name
+    `);
+
+    if (!studentTable.rows[0]?.table_name) {
+      throw new Error("contest_students table does not exist.");
+    }
+
+    /*
+     * The selected slot may already exist in the legacy teams tables.
+     * Reuse it instead of creating duplicate team records.
+     *
+     * TEST01 and every other non-contest slot remain untouched.
+     */
+    /*
+     * Check usernames globally before inserting.
+     */
+    const existingStudents = await client.query(
+      `
+        SELECT username
+        FROM contest_students
+        WHERE username = ANY($1::text[])
+      `,
+      [usernames]
+    );
+
+    if (existingStudents.rows.length > 0) {
+      await client.query("ROLLBACK");
+
+      return NextResponse.json(
+        {
+          success: false,
+          error: "One or more student usernames already exist.",
+          usernames: existingStudents.rows.map(
+            (row) => row.username
+          ),
+        },
+        { status: 409 }
+      );
+    }
+
+    /*
+     * Create the team.
+     *
+     * The existing schema is expected to contain:
+     *   team_id
+     *   team_name
+     *
+     * created_at is allowed to use its database default.
+     */
+    await client.query(
+      `
+        INSERT INTO teams (team_id, team_name)
+        VALUES ($1, $2)
+        ON CONFLICT (team_id)
+        DO UPDATE SET team_name = EXCLUDED.team_name
+      `,
+      [teamId, teamName]
+    );
+
+    /*
+     * contest_teams is the parent referenced by contest_students.
+     * Reuse an existing empty slot if present.
+     */
+    await client.query(
+      `
+        INSERT INTO contest_teams
+          (team_id, team_name)
+        VALUES
+          ($1, $2)
+        ON CONFLICT (team_id)
+        DO UPDATE SET
+          team_name = EXCLUDED.team_name
+      `,
+      [teamId, teamName]
+    );
+
+    /*
+     * One bcrypt hash per student account.
+     *
+     * The plaintext shared password is never stored.
+     */
+    for (const member of normalizedMembers) {
+      const passwordHash = await bcrypt.hash(password, 12);
+
+      await client.query(
+        `
+          INSERT INTO contest_students
+            (team_id, student_name, username, email, password_hash)
+          VALUES
+            ($1, $2, $3, $4, $5)
+        `,
+        [
+          teamId,
+          member.name,
+          member.username,
+          member.email,
+          passwordHash,
+        ]
+      );
+    }
+
+    await client.query("COMMIT");
+
+    /*
+     * INDIVIDUAL STUDENT EMAILS
+     *
+     * The database transaction is already committed.
+     * Each student receives their own credentials at their
+     * own email address.
+     *
+     * Email failure never rolls back a successful registration.
+     */
+
+    try {
+      const smtpHost = process.env.SMTP_HOST;
+      const smtpPort = Number(process.env.SMTP_PORT || 587);
+      const smtpUser = process.env.SMTP_USER;
+      const smtpPassword = process.env.SMTP_PASSWORD;
+      const emailFrom =
+        process.env.EMAIL_FROM ||
+        process.env.SMTP_FROM ||
+        smtpUser;
+
+      if (
+        !smtpHost ||
+        !smtpUser ||
+        !smtpPassword ||
+        !emailFrom
+      ) {
+        console.error(
+          "[REGISTRATION EMAIL] SMTP configuration is incomplete."
+        );
+      } else {
+        const transporter = nodemailer.createTransport({
+          host: smtpHost,
+          port: smtpPort,
+          secure:
+            process.env.SMTP_SECURE === "true" ||
+            smtpPort === 465,
+          auth: {
+            user: smtpUser,
+            pass: smtpPassword,
+          },
+        });
+
+        const teamLoginUrl =
+          process.env.NEXT_PUBLIC_CONTEST_URL ||
+          "http://localhost:3000";
+
+        for (const member of normalizedMembers) {
+          try {
+            await transporter.sendMail({
+              from: emailFrom,
+              to: member.email,
+
+              subject:
+                "SOC Alert Triage Contest — Your Login Credentials",
+
+              text: `
+SOC ALERT TRIAGE CONTEST
+REGISTRATION SUCCESSFUL
+
+Hello ${member.name},
+
+Your student account has been created successfully.
+
+TEAM DETAILS
+------------------------------
+Team ID   : ${teamId}
+Team Name : ${teamName}
+
+YOUR LOGIN CREDENTIALS
+------------------------------
+Student Name : ${member.name}
+Username     : ${member.username}
+Password     : ${password}
+
+CONTEST LOGIN
+------------------------------
+${teamLoginUrl}
+
+Please keep your credentials safe.
+
+SOC Alert Triage Contest
+              `.trim(),
+
+              html: `
+                <div style="font-family:Arial,sans-serif;max-width:650px;margin:auto;padding:30px;background:#f4f7fb;">
+
+                  <div style="background:#0f172a;color:white;padding:24px;border-radius:12px 12px 0 0;">
+                    <h1 style="margin:0;">
+                      SOC Alert Triage Contest
+                    </h1>
+
+                    <p style="margin:8px 0 0;color:#cbd5e1;">
+                      Registration Successful
+                    </p>
+                  </div>
+
+                  <div style="background:white;padding:28px;border-radius:0 0 12px 12px;">
+
+                    <p>
+                      Hello <strong>${member.name}</strong>,
+                    </p>
+
+                    <p>
+                      Your student account has been created successfully.
+                    </p>
+
+                    <h2>Team Details</h2>
+
+                    <table style="border-collapse:collapse;width:100%;">
+                      <tr>
+                        <td style="padding:10px;border:1px solid #ddd;font-weight:bold;">
+                          Team ID
+                        </td>
+                        <td style="padding:10px;border:1px solid #ddd;">
+                          ${teamId}
+                        </td>
+                      </tr>
+
+                      <tr>
+                        <td style="padding:10px;border:1px solid #ddd;font-weight:bold;">
+                          Team Name
+                        </td>
+                        <td style="padding:10px;border:1px solid #ddd;">
+                          ${teamName}
+                        </td>
+                      </tr>
+                    </table>
+
+                    <h2 style="margin-top:25px;">
+                      Your Login Credentials
+                    </h2>
+
+                    <table style="border-collapse:collapse;width:100%;">
+                      <tr>
+                        <td style="padding:10px;border:1px solid #ddd;font-weight:bold;">
+                          Student Name
+                        </td>
+                        <td style="padding:10px;border:1px solid #ddd;">
+                          ${member.name}
+                        </td>
+                      </tr>
+
+                      <tr>
+                        <td style="padding:10px;border:1px solid #ddd;font-weight:bold;">
+                          Username
+                        </td>
+                        <td style="padding:10px;border:1px solid #ddd;">
+                          ${member.username}
+                        </td>
+                      </tr>
+
+                      <tr>
+                        <td style="padding:10px;border:1px solid #ddd;font-weight:bold;">
+                          Password
+                        </td>
+                        <td style="padding:10px;border:1px solid #ddd;">
+                          ${password}
+                        </td>
+                      </tr>
+                    </table>
+
+                    <div style="margin-top:25px;">
+                      <a
+                        href="${teamLoginUrl}"
+                        style="display:inline-block;padding:12px 20px;background:#2563eb;color:white;text-decoration:none;border-radius:8px;"
+                      >
+                        Open Contest Platform
+                      </a>
+                    </div>
+
+                    <p style="margin-top:25px;color:#64748b;">
+                      These credentials are for your individual student account.
+                    </p>
+
+                    <p>
+                      Good luck!
+                    </p>
+
+                    <p style="font-weight:bold;">
+                      SOC Alert Triage Contest
+                    </p>
+
+                  </div>
+                </div>
+              `,
+            });
+
+            console.log(
+              "[REGISTRATION EMAIL] Student email sent to:",
+              member.email
+            );
+          } catch (studentEmailError) {
+            console.error(
+              "[REGISTRATION EMAIL] Student email failed for:",
+              member.email,
+              studentEmailError
+            );
+          }
+        }
+      }
+    } catch (emailError) {
+      console.error(
+        "[REGISTRATION EMAIL] Failed:",
+        emailError
+      );
+    }
+
+    return NextResponse.json(
+      {
+        success: true,
+        team_id: teamId,
+        team_name: teamName,
+        scenarios_assigned: [
+          "scenario01",
+          "scenario02",
+          "scenario03",
+          "scenario04",
+        ],
+        package_id: teamId.toLowerCase(),
+        members_created: normalizedMembers.length,
+      },
+      { status: 201 }
+    );
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {
+      // Ignore rollback errors.
+    }
+
+    console.error("[REGISTRATION ERROR]", error);
+
+    
+return NextResponse.json(
+      {
+        success: false,
+        error: "Registration failed. No partial registration was committed.",
+      },
+      { status: 500 }
+    );
+  } finally {
+    client.release();
+  }
+}

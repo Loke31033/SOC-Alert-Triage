@@ -1,0 +1,4 @@
+"use client";
+import {useEffect,useState} from "react";
+export default function LeaderboardPage(){const [teams,setTeams]=useState<any[]>([]);useEffect(()=>{fetch("/api/admin/teams",{cache:"no-store"}).then(r=>r.json()).then(d=>setTeams(d.teams||[]))},[]);const rows=[...teams].sort((a,b)=>b.total_score-a.total_score);
+return <div><div className="ops-page-head"><div><span className="eyebrow">RANKINGS</span><h1>Leaderboard</h1><p>Current aggregate ranking from submitted scenario scores.</p></div></div><section className="leaderboard-grid">{rows.map((t,i)=><a href={`/admin/teams/${t.team_id}`} className={`leader-card ${i<3?"podium":""}`} key={t.team_id}><span className="leader-rank">#{i+1}</span><div><b>{t.team_id}</b><small>{t.team_name}</small></div><strong>{t.total_score}</strong><em>{t.completed}/4 complete</em></a>)}</section></div>}

@@ -1,0 +1,214 @@
+import { NextRequest, NextResponse } from "next/server";
+import pool from "@/lib/db";
+import { getContestState } from "@/lib/contest-state";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+function isValidIdentifier(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^[a-zA-Z0-9_-]+$/.test(value)
+  );
+}
+
+function getKibanaBaseUrl(): string {
+  const value = process.env.KIBANA_BASE_URL;
+
+  if (!value) {
+    throw new Error(
+      "KIBANA_BASE_URL is not configured."
+    );
+  }
+
+  try {
+    const url = new URL(value);
+
+    if (!["http:", "https:"].includes(url.protocol)) {
+      throw new Error("Invalid Kibana URL protocol.");
+    }
+
+    return url.origin;
+  } catch {
+    throw new Error(
+      "KIBANA_BASE_URL must be a valid HTTP/HTTPS URL."
+    );
+  }
+}
+
+export async function GET(
+  request: NextRequest
+) {
+  try {
+    // --------------------------------------------------
+    // REQUEST PARAMETERS
+    // --------------------------------------------------
+
+    const teamId =
+      request.nextUrl.searchParams.get("team_id");
+
+    const scenarioId =
+      request.nextUrl.searchParams.get("scenario_id");
+
+    if (!isValidIdentifier(teamId)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Invalid team_id.",
+        },
+        { status: 400 }
+      );
+    }
+
+    if (!isValidIdentifier(scenarioId)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Invalid scenario_id.",
+        },
+        { status: 400 }
+      );
+    }
+
+    // --------------------------------------------------
+    // CONTEST STATE
+    // --------------------------------------------------
+
+    const contest = await getContestState();
+
+    if (contest.status !== "OPEN") {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Contest is not currently open.",
+        },
+        { status: 403 }
+      );
+    }
+
+    // --------------------------------------------------
+    // SCENARIO AVAILABILITY
+    // --------------------------------------------------
+
+    const scenarioResult = await pool.query(
+      `
+      SELECT
+        scenario_id,
+        enabled
+      FROM scenario_state
+      WHERE scenario_id = $1
+      LIMIT 1
+      `,
+      [scenarioId]
+    );
+
+    if (scenarioResult.rows.length === 0) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Scenario not found.",
+        },
+        { status: 404 }
+      );
+    }
+
+    if (!scenarioResult.rows[0].enabled) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Scenario is not currently enabled.",
+        },
+        { status: 403 }
+      );
+    }
+
+    // --------------------------------------------------
+    // TEAM VALIDATION
+    // --------------------------------------------------
+
+    const teamResult = await pool.query(
+      `
+      SELECT team_id
+      FROM teams
+      WHERE team_id = $1
+      LIMIT 1
+      `,
+      [teamId]
+    );
+
+    if (teamResult.rows.length === 0) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Team not found.",
+        },
+        { status: 404 }
+      );
+    }
+
+    // --------------------------------------------------
+    // --------------------------------------------------
+    // TEAM/SCENARIO ACCESS
+    // --------------------------------------------------
+    //
+    // The current database schema does not contain a
+    // team_scenarios table.
+    //
+    // Team access is validated through the existing
+    // teams table and scenario availability through
+    // scenario_state.
+    // --------------------------------------------------
+
+    const assignmentStatus = "ENABLED";
+
+    // KIBANA DESTINATION
+    // --------------------------------------------------
+
+    const kibanaBaseUrl = getKibanaBaseUrl();
+
+    /*
+     * The browser never supplies the Kibana destination.
+     *
+     * The server derives it from the validated
+     * team/scenario identifiers.
+     *
+     * The actual Kibana/Elasticsearch security layer
+     * must independently enforce index-level isolation.
+     */
+
+    const encodedTeam =
+      encodeURIComponent(teamId);
+
+    const encodedScenario =
+      encodeURIComponent(scenarioId);
+
+    const kibanaUrl =
+      `${kibanaBaseUrl}/app/discover` +
+      `#/?_g=(time:(from:now-24h,to:now))` +
+      `&_a=(query:(language:kuery,query:'team_id:%20"${encodedTeam}"%20AND%20scenario_id:%20"${encodedScenario}"'))`;
+
+    return NextResponse.json({
+      success: true,
+      team_id: teamId,
+      scenario_id: scenarioId,
+      assignment_status: assignmentStatus,
+      kibana_url: kibanaUrl,
+    });
+  } catch (error) {
+    console.error(
+      "[STUDENT KIBANA ACCESS ERROR]",
+      error
+    );
+
+    return NextResponse.json(
+      {
+        success: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Unable to create Kibana access.",
+      },
+      { status: 500 }
+    );
+  }
+}

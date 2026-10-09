@@ -1,0 +1,966 @@
+"use client";
+
+import { FormEvent, useMemo, useState } from "react";
+
+type Member = {
+  name: string;
+  username: string;
+};
+
+const EMPTY_MEMBERS: Member[] = Array.from({ length: 6 }, () => ({
+  name: "",
+  username: "",
+}));
+
+export default function RegistrationPage() {
+  const [teamName, setTeamName] = useState("");
+  const [error, setError] = useState("");
+  const [teamId, setTeamId] = useState("");
+  const [members, setMembers] = useState<Member[]>(EMPTY_MEMBERS);
+  const [registrationEmail, setRegistrationEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+
+  const passwordValid = password.length >= 8;
+  const passwordsMatch =
+    password.length > 0 &&
+    confirmPassword.length > 0 &&
+    password === confirmPassword;
+
+  const usernamesUnique = useMemo(() => {
+    const usernames = members
+      .map((member) => member.username.trim().toLowerCase())
+      .filter(Boolean);
+
+    return new Set(usernames).size === usernames.length;
+  }, [members]);
+
+  function updateMember(
+    index: number,
+    field: keyof Member,
+    value: string
+  ) {
+    setMembers((current) =>
+      current.map((member, memberIndex) =>
+        memberIndex === index
+          ? { ...member, [field]: value }
+          : member
+      )
+    );
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSubmitted(false);
+
+    if (!teamName.trim() || !teamId.trim()) {
+      return;
+    }
+
+    if (
+      !registrationEmail.trim() ||
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(registrationEmail.trim())
+    ) {
+      setError("Please enter a valid email address.");
+      return;
+    }
+
+    if (members.some((member) => !member.name.trim() || !member.username.trim())) {
+      return;
+    }
+
+    if (!usernamesUnique || !passwordValid || !passwordsMatch) {
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/registration", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          team_name: teamName.trim(),
+          email: registrationEmail.trim(),
+          team_id: teamId.trim().toUpperCase(),
+          password,
+          members: members.map((member) => ({
+            name: member.name.trim(),
+            username: member.username.trim().toLowerCase(),
+          })),
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(
+          data?.error || "Unable to register the team."
+        );
+      }
+
+      setSubmitted(true);
+    } catch (error) {
+      console.error("[REGISTRATION UI ERROR]", error);
+      window.alert(
+        error instanceof Error
+          ? error.message
+          : "Unable to register the team."
+      );
+    }
+  }
+
+  const formReady =
+    teamName.trim().length > 0 &&
+    teamId.trim().length > 0 &&
+    members.every(
+      (member) => member.name.trim() && member.username.trim()
+    ) &&
+    usernamesUnique &&
+    passwordValid &&
+    passwordsMatch;
+
+  return (
+    <main className="registration-page">
+      <div className="registration-shell">
+        <section className="registration-brand">
+          <div className="brand-mark">SOC</div>
+
+          <div>
+            <p className="eyebrow">SOC CONTEST</p>
+            <h1>Team Registration</h1>
+            <p className="brand-description">
+              Register your six-member security operations team.
+              Each member will use an individual username with the
+              shared team password.
+            </p>
+          </div>
+
+          <div className="security-note">
+            <span className="security-icon">◆</span>
+            <div>
+              <strong>Controlled registration</strong>
+              <p>
+                Exactly 6 students are required for every team.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section className="registration-card">
+          <div className="card-header">
+            <div>
+              <p className="section-kicker">STEP 01</p>
+              <h2>Create your team</h2>
+              <p>
+                Enter the team identity and six individual student
+                accounts.
+              </p>
+            </div>
+
+            <div className="member-count">
+              <span>TEAM SIZE</span>
+              <strong>6</strong>
+            </div>
+          </div>
+
+          <form onSubmit={handleSubmit}>
+            <section className="form-section">
+              <div className="section-title">
+                <span className="number">01</span>
+                <div>
+                  <h3>Team details</h3>
+                  <p>Use the official team name and unique Team ID.</p>
+                </div>
+              </div>
+
+              <div className="field-grid">
+                <label className="field">
+                  <span>Team Name</span>
+                  <input
+                    value={teamName}
+                    onChange={(event) => setTeamName(event.target.value)}
+                    placeholder="e.g. Blue SOC Warriors"
+                    autoComplete="organization"
+                    required
+                  />
+                </label>
+
+                <label className="field">
+                  <span>Team ID</span>
+                  <input
+                    value={teamId}
+                    onChange={(event) =>
+                      setTeamId(
+                        event.target.value
+                          .toUpperCase()
+                          .replace(/[^A-Z0-9_-]/g, "")
+                      )
+                    }
+                    placeholder="e.g. TEAM01"
+                    pattern="[A-Z0-9_-]+"
+                    required
+                  />
+                  <small>
+                    Letters, numbers, underscore and hyphen only.
+                  </small>
+                </label>
+              </div>
+            </section>
+
+            <section className="form-section">
+              <div className="section-title">
+                <span className="number">02</span>
+                <div>
+                  <h3>Team members</h3>
+                  <p>
+                    Each member receives an individual username.
+                  </p>
+                </div>
+              </div>
+
+              
+              <div className="field" style={{ marginBottom: "20px" }}>
+                <label htmlFor="registrationEmail">
+                  Registration Email
+                </label>
+
+                <input
+                  id="registrationEmail"
+                  name="registrationEmail"
+                  type="email"
+                  value={registrationEmail}
+                  onChange={(event) =>
+                    setRegistrationEmail(event.target.value)
+                  }
+                  placeholder="Enter email address"
+                  autoComplete="email"
+                  required
+                />
+
+                <small>
+                  Team registration details and login credentials will be
+                  sent to this email address.
+                </small>
+              </div>
+
+<div className="members-table">
+                <div className="members-header">
+                  <span>#</span>
+                  <span>Student name</span>
+                  <span>Username</span>
+                </div>
+
+                {members.map((member, index) => (
+                  <div className="member-row" key={index}>
+                    <div className="member-number">
+                      {String(index + 1).padStart(2, "0")}
+                    </div>
+
+                    <input
+                      value={member.name}
+                      onChange={(event) =>
+                        updateMember(index, "name", event.target.value)
+                      }
+                      placeholder={`Student ${index + 1} name`}
+                      autoComplete="name"
+                      required
+                    />
+
+                    <input
+                      value={member.username}
+                      onChange={(event) =>
+                        updateMember(
+                          index,
+                          "username",
+                          event.target.value
+                            .toLowerCase()
+                            .replace(/\s+/g, "")
+                        )
+                      }
+                      placeholder={`teamid_student${index + 1}`}
+                      autoComplete="username"
+                      required
+                    />
+                  </div>
+                ))}
+              </div>
+
+              {!usernamesUnique && (
+                <p className="validation-error">
+                  Each student username must be unique.
+                </p>
+              )}
+            </section>
+
+            <section className="form-section">
+              <div className="section-title">
+                <span className="number">03</span>
+                <div>
+                  <h3>Shared team password</h3>
+                  <p>
+                    All six members will use this password with their
+                    own username.
+                  </p>
+                </div>
+              </div>
+
+              <div className="password-grid">
+                <label className="field">
+                  <span>Team Password</span>
+                  <div className="password-wrapper">
+                    <input
+                      type={showPassword ? "text" : "password"}
+                      value={password}
+                      onChange={(event) =>
+                        setPassword(event.target.value)
+                      }
+                      placeholder="Minimum 8 characters"
+                      autoComplete="new-password"
+                      minLength={8}
+                      required
+                    />
+                    <button
+                      type="button"
+                      className="password-toggle"
+                      onClick={() => setShowPassword((value) => !value)}
+                      aria-label={
+                        showPassword
+                          ? "Hide password"
+                          : "Show password"
+                      }
+                    >
+                      {showPassword ? "HIDE" : "SHOW"}
+                    </button>
+                  </div>
+                  <small
+                    className={passwordValid ? "valid-text" : ""}
+                  >
+                    {password.length === 0
+                      ? "Minimum 8 characters."
+                      : passwordValid
+                        ? "Password length requirement satisfied."
+                        : "Password must contain at least 8 characters."}
+                  </small>
+                </label>
+
+                <label className="field">
+                  <span>Confirm Team Password</span>
+                  <div className="password-wrapper">
+                    <input
+                      type={showConfirmPassword ? "text" : "password"}
+                      value={confirmPassword}
+                      onChange={(event) =>
+                        setConfirmPassword(event.target.value)
+                      }
+                      placeholder="Re-enter team password"
+                      autoComplete="new-password"
+                      minLength={8}
+                      required
+                    />
+                    <button
+                      type="button"
+                      className="password-toggle"
+                      onClick={() =>
+                        setShowConfirmPassword((value) => !value)
+                      }
+                      aria-label={
+                        showConfirmPassword
+                          ? "Hide password"
+                          : "Show password"
+                      }
+                    >
+                      {showConfirmPassword ? "HIDE" : "SHOW"}
+                    </button>
+                  </div>
+                  {confirmPassword.length > 0 && (
+                    <small
+                      className={
+                        passwordsMatch
+                          ? "valid-text"
+                          : "validation-error"
+                      }
+                    >
+                      {passwordsMatch
+                        ? "Passwords match."
+                        : "Passwords do not match."}
+                    </small>
+                  )}
+                </label>
+              </div>
+
+              <div className="password-info">
+                <span>i</span>
+                <p>
+                  The shared password is intended for the six members
+                  of this team. Each student still has a separate
+                  username for identification and team access control.
+                </p>
+              </div>
+            </section>
+
+            <div className="form-footer">
+              <div className="form-status">
+                <span className={formReady ? "status-dot ready" : "status-dot"} />
+                <span>
+                  {formReady
+                    ? "Registration form is ready."
+                    : "Complete all required fields."}
+                </span>
+              </div>
+
+              <button
+                className="register-button"
+                type="submit"
+                disabled={!formReady}
+              >
+                <span>CREATE TEAM</span>
+                <span className="arrow">→</span>
+              </button>
+            </div>
+
+            {submitted && (
+              <div className="demo-success">
+                <strong>Registration successful.</strong>
+                <span>
+                  Phase 8F-1 is UI-only. Database registration will be
+                  connected in Phase 8F-2.
+                </span>
+              </div>
+            )}
+          </form>
+        </section>
+      </div>
+
+      <style jsx global>{`
+        * {
+          box-sizing: border-box;
+        }
+
+        html,
+        body {
+          margin: 0;
+          padding: 0;
+          min-height: 100%;
+          background: #071018;
+        }
+
+        body {
+          font-family:
+            Inter, ui-sans-serif, system-ui, -apple-system,
+            BlinkMacSystemFont, "Segoe UI", sans-serif;
+          color: #e7eef4;
+        }
+
+        button,
+        input {
+          font: inherit;
+        }
+
+        .registration-page {
+          min-height: 100vh;
+          padding: 48px 24px;
+          background:
+            radial-gradient(
+              circle at 15% 10%,
+              rgba(41, 111, 153, 0.16),
+              transparent 30%
+            ),
+            radial-gradient(
+              circle at 85% 90%,
+              rgba(22, 174, 141, 0.1),
+              transparent 30%
+            ),
+            linear-gradient(145deg, #071018 0%, #0a151f 52%, #071018 100%);
+        }
+
+        .registration-shell {
+          width: min(1120px, 100%);
+          margin: 0 auto;
+          display: grid;
+          grid-template-columns: 0.78fr 1.45fr;
+          gap: 28px;
+          align-items: start;
+        }
+
+        .registration-brand {
+          position: sticky;
+          top: 30px;
+          padding: 34px 12px 34px 4px;
+        }
+
+        .brand-mark {
+          width: 58px;
+          height: 58px;
+          display: grid;
+          place-items: center;
+          margin-bottom: 28px;
+          border: 1px solid rgba(93, 211, 255, 0.35);
+          border-radius: 14px;
+          background: rgba(12, 40, 54, 0.75);
+          color: #76dcff;
+          font-size: 13px;
+          font-weight: 800;
+          letter-spacing: 0.14em;
+          box-shadow: 0 0 35px rgba(45, 183, 231, 0.08);
+        }
+
+        .eyebrow,
+        .section-kicker {
+          margin: 0 0 9px;
+          color: #61c9ec;
+          font-size: 11px;
+          font-weight: 800;
+          letter-spacing: 0.18em;
+        }
+
+        .registration-brand h1 {
+          margin: 0;
+          max-width: 430px;
+          font-size: clamp(36px, 4vw, 54px);
+          line-height: 0.98;
+          letter-spacing: -0.045em;
+        }
+
+        .brand-description {
+          max-width: 430px;
+          margin: 20px 0 0;
+          color: #91a5b4;
+          font-size: 15px;
+          line-height: 1.75;
+        }
+
+        .security-note {
+          display: flex;
+          gap: 14px;
+          margin-top: 42px;
+          padding: 17px;
+          border: 1px solid rgba(91, 161, 190, 0.18);
+          border-radius: 12px;
+          background: rgba(7, 25, 35, 0.62);
+        }
+
+        .security-icon {
+          color: #62d5ba;
+          font-size: 14px;
+        }
+
+        .security-note strong {
+          display: block;
+          margin-bottom: 4px;
+          font-size: 13px;
+        }
+
+        .security-note p {
+          margin: 0;
+          color: #7f96a6;
+          font-size: 12px;
+          line-height: 1.5;
+        }
+
+        .registration-card {
+          overflow: hidden;
+          border: 1px solid rgba(116, 163, 186, 0.2);
+          border-radius: 18px;
+          background: rgba(10, 22, 31, 0.93);
+          box-shadow:
+            0 30px 90px rgba(0, 0, 0, 0.32),
+            inset 0 1px 0 rgba(255, 255, 255, 0.025);
+        }
+
+        .card-header {
+          display: flex;
+          justify-content: space-between;
+          gap: 20px;
+          padding: 28px 30px;
+          border-bottom: 1px solid rgba(116, 163, 186, 0.14);
+        }
+
+        .card-header h2 {
+          margin: 0;
+          font-size: 22px;
+          letter-spacing: -0.025em;
+        }
+
+        .card-header p:not(.section-kicker) {
+          margin: 7px 0 0;
+          color: #8196a4;
+          font-size: 13px;
+        }
+
+        .member-count {
+          min-width: 82px;
+          height: 66px;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          border: 1px solid rgba(87, 205, 180, 0.2);
+          border-radius: 10px;
+          background: rgba(32, 128, 107, 0.08);
+        }
+
+        .member-count span {
+          color: #6f8c99;
+          font-size: 8px;
+          font-weight: 800;
+          letter-spacing: 0.14em;
+        }
+
+        .member-count strong {
+          color: #6be0c3;
+          font-size: 23px;
+        }
+
+        form {
+          padding: 0 30px 30px;
+        }
+
+        .form-section {
+          padding: 28px 0;
+          border-bottom: 1px solid rgba(116, 163, 186, 0.12);
+        }
+
+        .section-title {
+          display: flex;
+          gap: 13px;
+          align-items: flex-start;
+          margin-bottom: 21px;
+        }
+
+        .number {
+          width: 29px;
+          height: 29px;
+          flex: 0 0 29px;
+          display: grid;
+          place-items: center;
+          border: 1px solid rgba(91, 190, 218, 0.28);
+          border-radius: 8px;
+          color: #63cce9;
+          font-size: 10px;
+          font-weight: 800;
+        }
+
+        .section-title h3 {
+          margin: 0;
+          font-size: 15px;
+        }
+
+        .section-title p {
+          margin: 4px 0 0;
+          color: #718794;
+          font-size: 12px;
+        }
+
+        .field-grid,
+        .password-grid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 16px;
+        }
+
+        .field {
+          display: block;
+        }
+
+        .field > span {
+          display: block;
+          margin-bottom: 8px;
+          color: #b6c6cf;
+          font-size: 11px;
+          font-weight: 700;
+        }
+
+        .field input {
+          width: 100%;
+          height: 46px;
+          padding: 0 13px;
+          outline: none;
+          border: 1px solid rgba(116, 163, 186, 0.18);
+          border-radius: 8px;
+          background: #08151e;
+          color: #e6f0f5;
+          transition:
+            border-color 0.18s ease,
+            box-shadow 0.18s ease,
+            background 0.18s ease;
+        }
+
+        .field input::placeholder {
+          color: #425866;
+        }
+
+        .field input:focus {
+          border-color: rgba(77, 195, 232, 0.7);
+          background: #091923;
+          box-shadow: 0 0 0 3px rgba(50, 180, 219, 0.08);
+        }
+
+        .field small {
+          display: block;
+          margin-top: 7px;
+          color: #617986;
+          font-size: 10px;
+        }
+
+        .valid-text {
+          color: #64d5b7 !important;
+        }
+
+        .members-table {
+          overflow: hidden;
+          border: 1px solid rgba(116, 163, 186, 0.15);
+          border-radius: 10px;
+        }
+
+        .members-header,
+        .member-row {
+          display: grid;
+          grid-template-columns: 42px 1fr 1fr;
+          gap: 10px;
+          align-items: center;
+          padding: 9px 10px;
+        }
+
+        .members-header {
+          background: rgba(42, 79, 96, 0.14);
+          color: #607b89;
+          font-size: 9px;
+          font-weight: 800;
+          letter-spacing: 0.12em;
+          text-transform: uppercase;
+        }
+
+        .member-row {
+          border-top: 1px solid rgba(116, 163, 186, 0.09);
+        }
+
+        .member-row input {
+          height: 40px;
+        }
+
+        .member-number {
+          display: grid;
+          place-items: center;
+          color: #4e7181;
+          font-size: 11px;
+          font-weight: 800;
+        }
+
+        .validation-error {
+          margin: 9px 0 0;
+          color: #ef8f8f;
+          font-size: 11px;
+        }
+
+        .password-wrapper {
+          position: relative;
+        }
+
+        .password-wrapper input {
+          padding-right: 68px;
+        }
+
+        .password-toggle {
+          position: absolute;
+          top: 50%;
+          right: 8px;
+          transform: translateY(-50%);
+          padding: 5px 7px;
+          border: 0;
+          border-radius: 5px;
+          background: transparent;
+          color: #5795aa;
+          cursor: pointer;
+          font-size: 8px;
+          font-weight: 800;
+          letter-spacing: 0.08em;
+        }
+
+        .password-toggle:hover {
+          color: #78d6ef;
+          background: rgba(68, 170, 200, 0.08);
+        }
+
+        .password-info {
+          display: flex;
+          gap: 10px;
+          margin-top: 18px;
+          padding: 12px 14px;
+          border: 1px solid rgba(80, 151, 177, 0.13);
+          border-radius: 8px;
+          background: rgba(26, 63, 77, 0.08);
+        }
+
+        .password-info > span {
+          width: 18px;
+          height: 18px;
+          flex: 0 0 18px;
+          display: grid;
+          place-items: center;
+          border: 1px solid rgba(89, 194, 220, 0.3);
+          border-radius: 50%;
+          color: #62c8e7;
+          font-size: 10px;
+        }
+
+        .password-info p {
+          margin: 0;
+          color: #718894;
+          font-size: 11px;
+          line-height: 1.6;
+        }
+
+        .form-footer {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 18px;
+          padding-top: 25px;
+        }
+
+        .form-status {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          color: #637b88;
+          font-size: 11px;
+        }
+
+        .status-dot {
+          width: 7px;
+          height: 7px;
+          border-radius: 50%;
+          background: #455862;
+        }
+
+        .status-dot.ready {
+          background: #5bd1b2;
+          box-shadow: 0 0 12px rgba(91, 209, 178, 0.45);
+        }
+
+        .register-button {
+          min-width: 170px;
+          height: 46px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 20px;
+          border: 1px solid rgba(82, 212, 184, 0.32);
+          border-radius: 8px;
+          background: linear-gradient(
+            135deg,
+            rgba(39, 137, 117, 0.82),
+            rgba(27, 103, 93, 0.82)
+          );
+          color: #eafff9;
+          cursor: pointer;
+          font-size: 10px;
+          font-weight: 800;
+          letter-spacing: 0.12em;
+          transition:
+            transform 0.18s ease,
+            opacity 0.18s ease,
+            box-shadow 0.18s ease;
+        }
+
+        .register-button:not(:disabled):hover {
+          transform: translateY(-1px);
+          box-shadow: 0 12px 30px rgba(23, 139, 115, 0.16);
+        }
+
+        .register-button:disabled {
+          cursor: not-allowed;
+          opacity: 0.35;
+        }
+
+        .arrow {
+          font-size: 17px;
+        }
+
+        .demo-success {
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+          margin-top: 18px;
+          padding: 13px 15px;
+          border: 1px solid rgba(82, 212, 184, 0.2);
+          border-radius: 8px;
+          background: rgba(35, 139, 113, 0.08);
+          color: #69d5bc;
+          font-size: 11px;
+          line-height: 1.5;
+        }
+
+        .demo-success span {
+          color: #78948e;
+        }
+
+        @media (max-width: 900px) {
+          .registration-shell {
+            grid-template-columns: 1fr;
+          }
+
+          .registration-brand {
+            position: static;
+            padding: 10px 0 0;
+          }
+
+          .brand-description {
+            max-width: 700px;
+          }
+
+          .security-note {
+            margin-top: 24px;
+          }
+        }
+
+        @media (max-width: 650px) {
+          .registration-page {
+            padding: 22px 12px;
+          }
+
+          .card-header,
+          form {
+            padding-left: 18px;
+            padding-right: 18px;
+          }
+
+          .card-header {
+            align-items: flex-start;
+          }
+
+          .field-grid,
+          .password-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .members-header {
+            display: none;
+          }
+
+          .member-row {
+            grid-template-columns: 32px 1fr;
+            padding: 11px 9px;
+          }
+
+          .member-row input:last-child {
+            grid-column: 2;
+          }
+
+          .form-footer {
+            flex-direction: column;
+            align-items: stretch;
+          }
+
+          .register-button {
+            width: 100%;
+          }
+        }
+      `}</style>
+    </main>
+  );
+}

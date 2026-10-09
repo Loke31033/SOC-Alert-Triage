@@ -1,0 +1,233 @@
+"use client";
+
+import { useEffect, useState } from "react";
+
+type Result = {
+  scenario_id: string;
+  score: number;
+  maximum_marks: number;
+  percentage: string | number;
+  submitted_at: string;
+};
+
+export default function StudentDashboard() {
+  const [teamId, setTeamId] = useState("");
+
+  useEffect(() => {
+    const storedTeamId = sessionStorage.getItem("student_team_id");
+    if (storedTeamId) {
+      setTeamId(storedTeamId);
+    }
+  }, []);
+
+
+  const [results, setResults] = useState<Result[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    fetch(`/api/student/results/${teamId}`, {
+      cache: "no-store",
+    })
+      .then(async (response) => {
+        const data = await response.json();
+
+        if (!response.ok || !data.success) {
+          throw new Error(
+            data.error || "Unable to load results."
+          );
+        }
+
+        setResults(data.results || []);
+      })
+      .catch((err) => {
+        console.error(err);
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Unable to load results."
+        );
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+  }, []);
+
+  const scenarios = [
+    "scenario01",
+    "scenario02",
+    "scenario03",
+    "scenario04",
+  ];
+
+  const getResult = (scenario: string) =>
+    results.find(
+      (result) => result.scenario_id === scenario
+    );
+
+  const totalScore = results.reduce(
+    (sum, result) => sum + Number(result.score),
+    0
+  );
+
+  const totalMarks = 400;
+
+  const completed = results.length;
+
+  if (loading) {
+    return (
+      <main className="min-h-screen bg-slate-950 text-white flex items-center justify-center">
+        Loading dashboard...
+      </main>
+    );
+  }
+
+  if (error) {
+    return (
+      <main className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-6">
+        <div className="bg-red-950 border border-red-700 rounded-xl p-6">
+          <h1 className="text-xl font-bold mb-2">
+            Dashboard Error
+          </h1>
+          <p>{error}</p>
+        </div>
+      </main>
+    );
+  }
+
+  return (
+    <main className="min-h-screen bg-slate-950 text-white p-6 md:p-10">
+      <div className="max-w-6xl mx-auto">
+
+        <header className="mb-10">
+          <p className="text-blue-400 font-semibold">
+            SOC ALERT TRIAGE CONTEST
+          </p>
+
+          <h1 className="text-4xl font-bold mt-2">
+            Student Dashboard
+          </h1>
+
+          <p className="text-slate-400 mt-2">
+            Team:{" "}
+            <span className="text-white font-semibold">
+              {teamId}
+            </span>
+          </p>
+        </header>
+
+        <section className="grid md:grid-cols-3 gap-5 mb-10">
+
+          <div className="bg-slate-900 border border-slate-700 rounded-xl p-6">
+            <p className="text-slate-400">
+              Total Score
+            </p>
+
+            <p className="text-3xl font-bold mt-2">
+              {totalScore}
+              <span className="text-slate-500 text-lg">
+                {" "}/ {totalMarks}
+              </span>
+            </p>
+          </div>
+
+          <div className="bg-slate-900 border border-slate-700 rounded-xl p-6">
+            <p className="text-slate-400">
+              Scenarios Completed
+            </p>
+
+            <p className="text-3xl font-bold mt-2">
+              {completed}
+              <span className="text-slate-500 text-lg">
+                {" "}/ 4
+              </span>
+            </p>
+          </div>
+
+          <div className="bg-slate-900 border border-slate-700 rounded-xl p-6">
+            <p className="text-slate-400">
+              Progress
+            </p>
+
+            <p className="text-3xl font-bold mt-2">
+              {Math.round((completed / 4) * 100)}%
+            </p>
+          </div>
+
+        </section>
+
+        <section>
+          <h2 className="text-2xl font-bold mb-5">
+            Investigation Scenarios
+          </h2>
+
+          <div className="grid md:grid-cols-2 gap-5">
+
+            {scenarios.map((scenario) => {
+              const result = getResult(scenario);
+
+              return (
+                <div
+                  key={scenario}
+                  className="bg-slate-900 border border-slate-700 rounded-xl p-6"
+                >
+
+                  <div className="flex justify-between items-center">
+                    <h3 className="text-xl font-bold">
+                      {scenario.toUpperCase()}
+                    </h3>
+
+                    <span
+                      className={
+                        result
+                          ? "px-3 py-1 rounded-full bg-green-900 text-green-300 text-sm"
+                          : "px-3 py-1 rounded-full bg-slate-800 text-slate-400 text-sm"
+                      }
+                    >
+                      {result
+                        ? "COMPLETED"
+                        : "NOT STARTED"}
+                    </span>
+                  </div>
+
+                  {result ? (
+                    <div className="mt-6 space-y-2">
+                      <p>
+                        Score:{" "}
+                        <strong>
+                          {result.score} /{" "}
+                          {result.maximum_marks}
+                        </strong>
+                      </p>
+
+                      <p>
+                        Percentage:{" "}
+                        <strong>
+                          {result.percentage}%
+                        </strong>
+                      </p>
+
+                      <p className="text-sm text-slate-400">
+                        Submitted:{" "}
+                        {new Date(
+                          result.submitted_at
+                        ).toLocaleString()}
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="mt-6 text-slate-400">
+                      Investigation not completed yet.
+                    </p>
+                  )}
+
+                </div>
+              );
+            })}
+
+          </div>
+        </section>
+
+      </div>
+    </main>
+  );
+}
